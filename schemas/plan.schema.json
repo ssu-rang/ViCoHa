@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Plan",
+  "$comment": "Placeholder only; fields and validation rules are not defined yet.",
+  "type": "object"
+}

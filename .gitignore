@@ -1,12 +1,21 @@
+# Go build outputs and optional repository-local cache
 /bin/
 /dist/
 /vicoha
 /vicoha.exe
 *.test
 *.test.exe
+/.gocache/
+
+# Python environment and caches
 __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
 *.egg-info/
+
+# Local environment configuration; keep shareable examples
 .env
+.env.*
+!.env.example
+!.env.*.example

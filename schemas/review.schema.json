@@ -1,6 +1,23 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Review",
-  "$comment": "Placeholder only; fields and validation rules are not defined yet.",
-  "type": "object"
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "severity", "actionable", "details"],
+        "properties": {
+          "title": {"type": "string", "pattern": "\\S"},
+          "severity": {"type": "string", "pattern": "\\S"},
+          "actionable": {"type": "boolean"},
+          "details": {"type": "string", "pattern": "\\S"}
+        }
+      }
+    }
+  }
 }

@@ -73,6 +73,91 @@ instructed to mark only evidenced defects within task scope; repair is also
 instructed to reject speculative or out-of-scope suggestions. ViCoHa does not
 pretend that a JSON parser can determine whether an agent's judgment is correct.
 
+### Included Codex adapter (Luna / Sol)
+
+`cmd/vicoha-codex` is a thin executable adapter. The runner still accepts any
+executable implementing the contract above; no provider SDK or model-specific
+runner logic is required. Runtime model IDs are configuration, with no Astra
+dependency or automatic model substitution.
+
+Build both binaries and configure roles independently (POSIX shell):
+
+```sh
+go build -o bin/vicoha ./cmd/vicoha
+go build -o bin/vicoha-codex ./cmd/vicoha-codex
+export VICOHA_CODEX_IMPLEMENT_MODEL=gpt-5.6-luna
+export VICOHA_CODEX_REVIEW_MODEL=gpt-5.6-luna
+export VICOHA_CODEX_IMPLEMENT_EFFORT=medium
+export VICOHA_CODEX_REVIEW_EFFORT=medium
+./bin/vicoha --implement-command ./bin/vicoha-codex --review-command ./bin/vicoha-codex --repo /path/to/project "Implement the requested change"
+```
+
+Install Codex CLI separately, with support for `exec --ephemeral`, `--sandbox`,
+`--output-schema` and `--output-last-message` (local CLI inspected: 0.159.3).
+Authenticate through `CODEX_API_KEY` in your environment or an existing file-based
+Codex login (`$CODEX_HOME/auth.json`, otherwise `~/.codex/auth.json`). Keyring-only
+login is not copied; use an API key or `codex -c 'cli_auth_credentials_store="file"' login`.
+For repeated experiments prefer `CODEX_API_KEY`: login token refreshes in the
+temporary home are discarded, so an expired file-based login requires logging
+in again outside the adapter.
+Your account/provider must expose the selected model ID. Unsupported models or
+options fail the invocation; the adapter never silently falls back to another model.
+
+| Environment variable | Meaning |
+| --- | --- |
+| `VICOHA_CODEX_COMMAND` | Codex executable, default `codex` on PATH; paths must be absolute |
+| `VICOHA_CODEX_IMPLEMENT_MODEL` | Required for initial implementation and repair |
+| `VICOHA_CODEX_REVIEW_MODEL` | Required for review |
+| `VICOHA_CODEX_IMPLEMENT_EFFORT` | Optional implementation/repair reasoning effort, passed verbatim |
+| `VICOHA_CODEX_REVIEW_EFFORT` | Optional review reasoning effort, passed verbatim |
+
+The adapter recognizes the initial role line of ViCoHa's prompt, including repair
+as implementation. It forwards stdin unchanged and starts a fresh `codex exec`
+with a temporary `CODEX_HOME` on **every** invocation. Only file-based credentials
+are copied; user configuration, conversation, memories and logs are not copied.
+The home and final-response file are removed when the adapter exits normally,
+including reported errors. Forced termination can leave temporary files behind.
+Do not put private agent logs or session state in the target repository.
+
+Implementation and repair use `--sandbox workspace-write`; review uses
+`--sandbox read-only`. Approval policy is `never`, so a blocked operation fails
+instead of waiting for interactive approval. The adapter does not disable the
+sandbox. Use a Codex installation with working sandbox support on your platform.
+On native Windows it selects `windows.sandbox="unelevated"`, the restricted-token
+sandbox, because a fresh home has no persistent elevated-sandbox credentials.
+This provides weaker network isolation than the elevated backend; managed policy
+requiring elevated mode may reject it. See the official
+[Windows sandbox documentation](https://learn.chatgpt.com/docs/windows/windows-sandbox).
+Repository guidance remains available through the prompt and repository files.
+The runner's Git mutation checks still apply independently of the sandbox.
+
+Only the file produced by `--output-last-message` becomes adapter stdout.
+Codex progress goes to stderr. Review also uses the embedded, existing review
+JSON schema and validates the final response. Extra prose or invalid JSON fails;
+the adapter does not extract or repair JSON heuristically. No session is resumed
+or forked, including for repair. See the official
+[Codex CLI reference](https://developers.openai.com/codex/cli/reference) for these options.
+
+On Windows, use compiled `.exe` adapters and the native Codex binary, avoiding
+PowerShell execution-policy and `.cmd` shell quoting issues. For an npm installation:
+
+```powershell
+go build -o bin/vicoha.exe ./cmd/vicoha
+go build -o bin/vicoha-codex.exe ./cmd/vicoha-codex
+Get-ChildItem (Join-Path (npm.cmd root -g) '@openai') -Recurse -Filter codex.exe | Select-Object -ExpandProperty FullName
+$env:VICOHA_CODEX_COMMAND = 'C:\absolute\path\from\the\listing\codex.exe'
+$env:VICOHA_CODEX_IMPLEMENT_MODEL = 'gpt-5.6-luna'
+$env:VICOHA_CODEX_REVIEW_MODEL = 'gpt-5.6-luna'
+$env:VICOHA_CODEX_IMPLEMENT_EFFORT = 'medium'
+$env:VICOHA_CODEX_REVIEW_EFFORT = 'medium'
+./bin/vicoha.exe --implement-command ./bin/vicoha-codex.exe --review-command ./bin/vicoha-codex.exe --repo C:/path/to/project "Implement the requested change"
+```
+
+Other providers or custom Codex configuration can use their own executable
+adapters. Keep fresh sessions and the same stdout contract, and give review only
+repository evidence. The included adapter deliberately exposes only model and
+effort settings, without importing personal Codex configuration into experiments.
+
 ### Project context and verification
 
 Context includes root `AGENTS.md`, `README.md`, `go.mod`, `package.json`,
@@ -127,12 +212,19 @@ These are narrow regression cases, not evidence of universal coding quality.
 
 ```sh
 python eval/run.py --list
-python eval/run.py --vicoha ./bin/vicoha --implement-command /path/to/agent --review-command /path/to/reviewer --output results.jsonl
+python eval/run.py --vicoha ./bin/vicoha --implement-command ./bin/vicoha-codex --review-command ./bin/vicoha-codex --config-id luna-luna-medium --output results.jsonl
+python eval/run.py --vicoha ./bin/vicoha --implement-command ./bin/vicoha-codex --review-command ./bin/vicoha-codex --config-id luna-luna-medium --trials 5 --output repeated.jsonl
 ```
 
 Use `--case scope-creep` to select a case or `--mode baseline` / `--mode vicoha` to
 run one side. Python 3.11+ is required; no Python packages need installation.
-See the eval README for oracle semantics, metrics, and limitations.
+`--trials 5` runs six cases times five trials times two modes: 60 fresh repositories.
+Every record includes a 1-based trial index, required `--config-id` label,
+executable paths and the included adapter's model/effort settings. Credentials are
+not recorded. For other adapters, include model/settings/version identity in the
+label. ViCoHa uses extra review/repair calls; this is not equal-compute evaluation.
+See the [eval README](eval/README.md) for exact Luna/Sol role combinations,
+oracle semantics, metrics, and limitations.
 `eval/swebench/` is reserved for future SWE-bench integration.
 
 ## Layout and development
@@ -144,6 +236,7 @@ See the eval README for oracle semantics, metrics, and limitations.
 - `internal/verify/`: deterministic command discovery and execution.
 - `internal/result/`: structured results shared by CLI and tooling.
 - `cmd/vicoha/`: human and JSON CLI output.
+- `cmd/vicoha-codex/`: optional Codex CLI executable adapter with fresh sessions.
 - `skills/`: project behavior instructions.
 - `schemas/`: runtime review contract; plan/project-profile remain documented placeholders.
 

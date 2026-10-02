@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -38,6 +39,11 @@ func run() error {
 	if phase == "review" {
 		fmt.Print(`{"findings":[]}`)
 		return nil
+	}
+	// Each baseline/initial implement call must start from a fresh clean fixture.
+	status, err := exec.Command("git", "status", "--porcelain").Output()
+	if err != nil || len(status) != 0 {
+		return fmt.Errorf("initial implementation repository is not clean: %s (%v)", status, err)
 	}
 	var edits map[string]string
 	if err := json.Unmarshal([]byte(os.Getenv("EVAL_EDITS")), &edits); err != nil {

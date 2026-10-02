@@ -1,12 +1,15 @@
 """Local deterministic checks; no model or network required."""
 
 import json
+import contextlib
+import io
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 # Also works with Windows' isolated embedded Python distribution.
 HERE = Path(__file__).resolve().parent
@@ -51,24 +54,69 @@ class EvaluationTests(unittest.TestCase):
             env = {**os.environ, "EVAL_EDITS": json.dumps(edits), "EVAL_PROMPTS": str(tmp)}
             proc = subprocess.run([sys.executable, str(HERE / "run.py"), "--case", "scope-creep",
                                    "--vicoha", str(cli), "--implement-command", str(agent),
-                                   "--review-command", str(agent)], env=env, text=True,
+                                   "--review-command", str(agent), "--trials", "2",
+                                   "--config-id", "scripted-fixture-v1",
+                                   "--work-dir", str(tmp / "repos")], env=env, text=True,
                                   encoding="utf-8", capture_output=True, timeout=180)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             records = [json.loads(line) for line in proc.stdout.splitlines()]
-            self.assertEqual([r["mode"] for r in records], ["baseline", "vicoha"])
+            self.assertEqual([(r["trial"], r["mode"]) for r in records],
+                             [(1, "baseline"), (1, "vicoha"), (2, "baseline"), (2, "vicoha")])
             self.assertTrue(all(r["oracle_success"] for r in records))
+            self.assertTrue(all(r["configuration"]["id"] == "scripted-fixture-v1" for r in records))
+            self.assertTrue(all(r["configuration"]["implement_command"] == str(agent) for r in records))
+            self.assertEqual(len(list((tmp / "repos").iterdir())), 4)
             workflow = records[1]["workflow"]
             self.assertEqual(workflow["status"], "success")
             self.assertEqual(workflow["agent_invocations"], 2)
             self.assertEqual(workflow["review_passes"], 1)
             self.assertEqual(len(workflow["verification"]), 2)
-            self.assertEqual((tmp / "scope-creep-baseline-implement.txt").read_bytes(),
-                             (tmp / "scope-creep-vicoha-implement.txt").read_bytes())
-            self.assertNotIn("private implementation output", (tmp / "scope-creep-vicoha-review.txt").read_text())
+            initial = (tmp / "scope-creep-trial-1-baseline-implement.txt").read_bytes()
+            for trial in (1, 2):
+                for mode in ("baseline", "vicoha"):
+                    self.assertEqual(initial, (tmp / f"scope-creep-trial-{trial}-{mode}-implement.txt").read_bytes())
+                review = (tmp / f"scope-creep-trial-{trial}-vicoha-review.txt").read_text()
+                self.assertNotIn("private implementation output", review)
+                self.assertIn("Overengineering", review)
+                self.assertIn("filesystem", review)
+                self.assertIn("low-value tests", review)
+                self.assertIn("Architectural or convention drift", review)
+
+    def test_trial_failures_keep_identity_and_continue(self):
+        out = io.StringIO()
+        with mock.patch.object(run, "run_case", side_effect=RuntimeError("setup failed")) as case_run, \
+                mock.patch.dict(os.environ, {"VICOHA_CODEX_IMPLEMENT_MODEL": "example-model",
+                                             "CODEX_API_KEY": "never-record-this"}), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = run.main(["--case", "scope-creep", "--trials", "2", "--config-id", "failure-check",
+                             "--implement-command", "implement", "--review-command", "review"])
+        self.assertEqual(code, 1)
+        self.assertEqual(case_run.call_count, 4)
+        records = [json.loads(line) for line in out.getvalue().splitlines()]
+        self.assertEqual([r["trial"] for r in records], [1, 1, 2, 2])
+        for record in records:
+            self.assertFalse(record["execution_success"])
+            self.assertEqual(record["errors"], ["setup failed"])
+            self.assertEqual(record["configuration"]["id"], "failure-check")
+            self.assertEqual(record["configuration"]["codex_adapter_environment"]
+                             ["VICOHA_CODEX_IMPLEMENT_MODEL"], "example-model")
+        self.assertNotIn("never-record-this", out.getvalue())
+
+    def test_cli_trial_and_configuration_validation(self):
+        base = ["--implement-command", "unused", "--mode", "baseline", "--config-id", "fixture"]
+        for flags in (["--trials", "0"], ["--trials", "-1"], ["--trials", "1.5"],
+                      ["--config-id", " "], ["--timeout", "nan"], ["--timeout", "inf"]):
+            with self.subTest(flags=flags), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as exc:
+                    run.main(base + flags)
+                self.assertEqual(exc.exception.code, 2)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as exc:
+            run.main(["--implement-command", "unused", "--mode", "baseline"])
+        self.assertEqual(exc.exception.code, 2)
 
     def test_diff_metrics_include_new_files(self):
         metrics, added = run.changes({"a.go": b"old\n"}, {"a.go": b"new\n", "a_test.go": b"test\n"})
-        self.assertEqual(metrics, {"changed_files": ["a.go", "a_test.go"], "added_lines": 2,
+        self.assertEqual(metrics, {"changed_files": ["a.go", "a_test.go"], "changed_files_count": 2, "added_lines": 2,
                                    "deleted_lines": 1, "added_test_lines": 1})
         self.assertEqual(added, "new\ntest")
 

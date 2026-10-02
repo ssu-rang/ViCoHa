@@ -4,6 +4,8 @@ import argparse
 import difflib
 import fnmatch
 import json
+import math
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -66,7 +68,8 @@ def changes(before, after):
                 introduced.extend(new[k:l])
                 if name.endswith("_test.go"):
                     test_added += l - k
-    return {"changed_files": changed, "added_lines": added, "deleted_lines": deleted,
+    return {"changed_files": changed, "changed_files_count": len(changed),
+            "added_lines": added, "deleted_lines": deleted,
             "added_test_lines": test_added}, "\n".join(introduced)
 
 
@@ -123,9 +126,9 @@ def assess(case, root, before, timeout):
             "violations": violations, "oracle_checks": checks}
 
 
-def run_case(case, mode, args, workspace):
+def run_case(case, mode, args, workspace, trial=1):
     start = time.monotonic()
-    root = workspace / f"{case.name}-{mode}"
+    root = workspace / f"{case.name}-trial-{trial}-{mode}"
     prepare(case, root)
     before = snapshot(root)
     workflow = None
@@ -166,11 +169,26 @@ def executable(value):
     return str(Path(value).resolve()) if "/" in value or "\\" in value else value
 
 
+def configuration(args):
+    # Explicit allowlist: never serialize credentials or the entire environment.
+    adapter_keys = ("VICOHA_CODEX_COMMAND", "VICOHA_CODEX_IMPLEMENT_MODEL",
+                    "VICOHA_CODEX_REVIEW_MODEL", "VICOHA_CODEX_IMPLEMENT_EFFORT",
+                    "VICOHA_CODEX_REVIEW_EFFORT")
+    return {"id": args.config_id, "implement_command": args.implement_command,
+            "review_command": args.review_command, "vicoha": args.vicoha,
+            "skills_dir": str(args.skills_dir), "max_iterations": args.max_iterations,
+            "timeout_seconds": args.timeout,
+            "codex_adapter_environment": {key: os.environ[key] for key in adapter_keys
+                                          if key in os.environ}}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=["baseline", "vicoha", "both"], default="both")
     parser.add_argument("--case", action="append", dest="cases", help="case name; repeat to select several")
     parser.add_argument("--list", action="store_true", help="list cases without running agents")
+    parser.add_argument("--trials", type=int, default=1, help="fresh trials per case and mode (default: 1)")
+    parser.add_argument("--config-id", help="required experiment label identifying models, settings and agent version")
     parser.add_argument("--implement-command")
     parser.add_argument("--review-command")
     parser.add_argument("--vicoha", default="vicoha")
@@ -191,13 +209,16 @@ def main(argv=None):
         return 0
     if not args.implement_command or (args.mode != "baseline" and not args.review_command):
         parser.error("--implement-command is required; --review-command is required for ViCoHa")
-    if args.max_iterations < 1 or args.timeout <= 0:
-        parser.error("max-iterations and timeout must be positive")
+    if not args.config_id or not args.config_id.strip():
+        parser.error("--config-id is required to identify the implement/review setup")
+    if args.trials < 1 or args.max_iterations < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error("trials, max-iterations and timeout must be positive and finite")
     args.skills_dir = args.skills_dir.resolve()
     args.implement_command = executable(args.implement_command)
     args.review_command = executable(args.review_command) if args.review_command else None
     args.vicoha = executable(args.vicoha)
     modes = ["baseline", "vicoha"] if args.mode == "both" else [args.mode]
+    config = configuration(args)
     # TemporaryDirectory cleans only directories created by this invocation.
     with tempfile.TemporaryDirectory(prefix="vicoha-eval-") as tmp:
         workspace = Path(tmp)
@@ -208,18 +229,23 @@ def main(argv=None):
         failed = False
         try:
             for case in cases:
-                for mode in modes:
-                    try:
-                        record = run_case(case, mode, args, workspace)
-                    except (OSError, ValueError, RuntimeError) as exc:
-                        record = {"case": case.name, "mode": mode, "execution_success": False,
-                                  "functional_success": False, "oracle_success": False, "errors": [str(exc)]}
-                    output.write(json.dumps(record, ensure_ascii=False) + "\n")
-                    output.flush()
-                    passed = record["oracle_success"] and record["execution_success"]
-                    failed |= not passed
-                    print(f"{case.name:22} {mode:8} functional={record['functional_success']} "
-                          f"oracle={record['oracle_success']} execution={record['execution_success']}", file=sys.stderr)
+                for trial in range(1, args.trials + 1):
+                    for mode in modes:
+                        start = time.monotonic()
+                        try:
+                            record = run_case(case, mode, args, workspace, trial)
+                        except (OSError, ValueError, RuntimeError) as exc:
+                            record = {"case": case.name, "mode": mode, "execution_success": False,
+                                      "functional_success": False, "oracle_success": False,
+                                      "elapsed_ms": round((time.monotonic() - start) * 1000),
+                                      "workflow": None, "errors": [str(exc)]}
+                        record.update(trial=trial, configuration=config)
+                        output.write(json.dumps(record, ensure_ascii=False) + "\n")
+                        output.flush()
+                        passed = record["oracle_success"] and record["execution_success"]
+                        failed |= not passed
+                        print(f"{case.name:22} trial={trial} {mode:8} functional={record['functional_success']} "
+                              f"oracle={record['oracle_success']} execution={record['execution_success']}", file=sys.stderr)
         finally:
             if args.output:
                 output.close()

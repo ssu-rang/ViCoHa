@@ -67,7 +67,7 @@ func fakeAgent(mode string) {
 		fmt.Print("private implement output marker")
 		return
 	}
-	if strings.Contains(prompt, "private implement output marker") || !strings.Contains(prompt, "review skill marker") || !strings.Contains(prompt, "implementation change marker") {
+	if strings.Contains(prompt, "private implement output marker") || strings.Contains(prompt, "implement skill marker") || !strings.Contains(prompt, "review skill marker") || !strings.Contains(prompt, "implementation change marker") || !strings.Contains(prompt, "project guidance marker") {
 		os.Exit(16)
 	}
 	if mode == "review_failure" {
@@ -96,6 +96,12 @@ func fakeAgent(mode string) {
 	if mode == "mutating" {
 		_ = os.WriteFile("change.txt", []byte("review mutation"), 0600)
 	}
+	if mode == "review_untracked" {
+		_ = os.WriteFile("review-created.txt", []byte("review mutation"), 0600)
+	}
+	if mode == "review_delete" {
+		_ = os.Remove("README.md")
+	}
 	if mode == "limit" || mode == "one_pass" || (mode == "repair" && !strings.Contains(string(log), "review")) {
 		fmt.Print(`{"findings":[{"title":"Concrete defect","severity":"high","actionable":true,"details":"Fix the implementation"},{"title":"speculative marker","severity":"low","actionable":false,"details":"Maybe change unrelated code"}]}`)
 		return
@@ -117,6 +123,8 @@ func TestRunWorkflow(t *testing.T) {
 		{"review_failure", result.ReviewFailed, "implement\nreview\n", false},
 		{"malformed", result.ReviewFailed, "implement\nreview\n", false},
 		{"mutating", result.ReviewFailed, "implement\nreview\n", false},
+		{"review_untracked", result.ReviewFailed, "implement\nreview\n", false},
+		{"review_delete", result.ReviewFailed, "implement\nreview\n", false},
 		{"staging", result.ReviewFailed, "implement\nreview\n", false},
 		{"review_commit", result.ReviewFailed, "implement\nreview\n", false},
 		{"review_branch", result.ReviewFailed, "implement\nreview\n", false},
@@ -128,6 +136,7 @@ func TestRunWorkflow(t *testing.T) {
 			root := filepath.Join(parent, "repo")
 			skills := filepath.Join(parent, "skills")
 			writeTestFile(t, filepath.Join(root, "README.md"), "fixture")
+			writeTestFile(t, filepath.Join(root, "AGENTS.md"), "project guidance marker")
 			writeTestFile(t, filepath.Join(skills, "implement", "SKILL.md"), "implement skill marker")
 			writeTestFile(t, filepath.Join(skills, "review", "SKILL.md"), "review skill marker")
 			if tc.goProject {

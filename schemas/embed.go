@@ -5,3 +5,6 @@ import _ "embed"
 
 //go:embed review.schema.json
 var Review []byte
+
+//go:embed verify-discovery.schema.json
+var Discovery []byte

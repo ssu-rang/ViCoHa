@@ -1,104 +1,75 @@
+// Package verify separates command selection, validation and process execution.
 package verify
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"time"
 
 	"vicoha/internal/result"
 )
 
-// Run selects checks from configuration files actually present in the project.
+type Command struct {
+	Argv     []string
+	Source   string
+	Declared bool
+	Evidence []string
+}
+
+// Run is the deterministic-only entrypoint. Uncertain discovery fails closed.
 func Run(root string) ([]result.Verification, error) {
-	commands, err := verificationCommands(root)
+	d, err := Discover(root)
 	if err != nil {
 		return nil, err
 	}
-	var checks []result.Verification
-	for _, args := range commands {
-		cmd := exec.Command(args[0], args[1:]...)
-		// npm is distributed as npm.cmd on Windows, which requires cmd.exe.
-		if runtime.GOOS == "windows" && args[0] == "npm" {
-			cmd = exec.Command("cmd.exe", append([]string{"/d", "/c"}, args...)...)
+	if !d.Confident {
+		return nil, fmt.Errorf("verification discovery needs repository-specific guidance")
+	}
+	return Execute(context.Background(), root, d.Commands)
+}
+
+// Execute validates the entire selection before starting anything, stops at the
+// first failure, and derives status exclusively from process execution.
+func Execute(ctx context.Context, root string, commands []Command) ([]result.Verification, error) {
+	if len(commands) == 0 {
+		return nil, fmt.Errorf("no verification commands discovered")
+	}
+	for _, c := range commands {
+		if err := Validate(root, c.Argv); err != nil {
+			return nil, err
+		}
+	}
+	checks := make([]result.Verification, 0, len(commands))
+	for _, c := range commands {
+		args := c.Argv
+		executable := args[0]
+		if strings.ContainsAny(executable, `/\`) {
+			executable = filepath.Join(root, executable)
+		}
+		cmd := exec.CommandContext(ctx, executable, args[1:]...)
+		// Only validated simple arguments cross the Windows shim shell boundary.
+		if windowsShim(args[0]) {
+			shimArgs := append([]string{"/d", "/c", filepath.FromSlash(args[0])}, args[1:]...)
+			cmd = exec.CommandContext(ctx, "cmd.exe", shimArgs...)
 		}
 		cmd.Dir = root
+		start := time.Now()
 		out, err := cmd.CombinedOutput()
-		status := "passed"
-		if err != nil {
-			status = "failed"
+		check := result.Verification{Command: strings.Join(args, " "), Argv: args, Source: c.Source, RepositoryDeclared: c.Declared, Evidence: c.Evidence, Status: "passed", Output: string(out), DurationMS: time.Since(start).Milliseconds()}
+		if cmd.ProcessState != nil {
+			code := cmd.ProcessState.ExitCode()
+			check.ExitCode = &code
 		}
-		checks = append(checks, result.Verification{Command: strings.Join(args, " "), Status: status, Output: string(out)})
 		if err != nil {
-			return checks, fmt.Errorf("verification %q failed: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+			check.Status = "failed"
+		}
+		checks = append(checks, check)
+		if err != nil {
+			return checks, fmt.Errorf("verification %q failed: %w\n%s", check.Command, err, strings.TrimSpace(string(out)))
 		}
 	}
 	return checks, nil
-}
-
-func verificationCommands(root string) ([][]string, error) {
-	var commands [][]string
-	goProject, err := configExists(filepath.Join(root, "go.mod"))
-	if err != nil {
-		return nil, err
-	}
-	if goProject {
-		commands = append(commands, []string{"go", "test", "./..."}, []string{"go", "build", "./..."})
-	}
-	b, err := os.ReadFile(filepath.Join(root, "package.json"))
-	if err == nil {
-		var data struct {
-			Scripts map[string]string `json:"scripts"`
-		}
-		if err := json.Unmarshal(b, &data); err != nil {
-			return nil, fmt.Errorf("read package.json: %w", err)
-		}
-		// Only invoke package scripts explicitly declared by the project.
-		for _, name := range []string{"test", "build", "lint", "typecheck"} {
-			if strings.TrimSpace(data.Scripts[name]) != "" {
-				commands = append(commands, []string{"npm", "run", name})
-			}
-		}
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("read package.json: %w", err)
-	}
-	pytest, err := configExists(filepath.Join(root, "pytest.ini"))
-	if err != nil {
-		return nil, err
-	}
-	b, err = os.ReadFile(filepath.Join(root, "pyproject.toml"))
-	if err == nil {
-		for _, line := range strings.Split(string(b), "\n") {
-			line = strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
-			if line == "[tool.pytest.ini_options]" {
-				pytest = true
-			}
-		}
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("read pyproject.toml: %w", err)
-	}
-	if pytest {
-		commands = append(commands, []string{"python", "-m", "pytest"})
-	}
-	if len(commands) == 0 {
-		return nil, fmt.Errorf("no supported deterministic verification commands configured")
-	}
-	return commands, nil
-}
-
-func configExists(path string) (bool, error) {
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("inspect configuration %s: %w", path, err)
-	}
-	if info.IsDir() {
-		return false, fmt.Errorf("configuration %s is a directory", path)
-	}
-	return true, nil
 }

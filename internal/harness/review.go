@@ -3,13 +3,14 @@ package harness
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 )
 
 type Finding struct {
 	Title      string `json:"title"`
+	Category   string `json:"category"`
 	Severity   string `json:"severity"`
+	File       string `json:"file,omitempty"`
 	Actionable *bool  `json:"actionable"`
 	Details    string `json:"details"`
 }
@@ -21,12 +22,8 @@ type Review struct {
 func ParseReview(out string) (Review, error) {
 	var report Review
 	var object map[string]json.RawMessage
-	decoder := json.NewDecoder(strings.NewReader(out))
-	if err := decoder.Decode(&object); err != nil {
+	if err := StrictJSON(out, &object); err != nil {
 		return report, err
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return report, fmt.Errorf("expected exactly one JSON object")
 	}
 	if len(object) != 1 || object["findings"] == nil {
 		return report, fmt.Errorf("review requires only the findings property")
@@ -40,12 +37,12 @@ func ParseReview(out string) (Review, error) {
 	}
 	report.Findings = make([]Finding, 0, len(items))
 	for i, item := range items {
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(item, &fields); err != nil {
+		var properties map[string]json.RawMessage
+		if err := json.Unmarshal(item, &properties); err != nil {
 			return report, err
 		}
-		if len(fields) != 4 || fields["title"] == nil || fields["severity"] == nil || fields["actionable"] == nil || fields["details"] == nil {
-			return report, fmt.Errorf("finding %d requires exactly title, severity, actionable and details", i+1)
+		if err := fields(properties, []string{"title", "category", "severity", "actionable", "details"}, "file"); err != nil {
+			return report, fmt.Errorf("finding %d: %w", i+1, err)
 		}
 		var f Finding
 		if err := json.Unmarshal(item, &f); err != nil {
@@ -53,6 +50,19 @@ func ParseReview(out string) (Review, error) {
 		}
 		if strings.TrimSpace(f.Title) == "" || strings.TrimSpace(f.Severity) == "" || strings.TrimSpace(f.Details) == "" || f.Actionable == nil {
 			return report, fmt.Errorf("finding %d requires non-empty title, severity, details and boolean actionable", i+1)
+		}
+		switch f.Category {
+		case "functional_defect", "regression", "overengineering", "temporary_fix", "resource_waste", "excessive_tests", "scope_creep", "architecture_drift", "integration_problem", "other":
+		default:
+			return report, fmt.Errorf("finding %d has invalid category", i+1)
+		}
+		switch f.Severity {
+		case "low", "medium", "high", "critical":
+		default:
+			return report, fmt.Errorf("finding %d has invalid severity", i+1)
+		}
+		if properties["file"] != nil && (string(properties["file"]) == "null" || strings.TrimSpace(f.File) == "") {
+			return report, fmt.Errorf("file must be non-empty when present")
 		}
 		report.Findings = append(report.Findings, f)
 	}

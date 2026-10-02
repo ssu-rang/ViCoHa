@@ -23,6 +23,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	implement := fs.String("implement-command", os.Getenv("VICOHA_IMPLEMENT_COMMAND"), "agent executable for implementation (or VICOHA_IMPLEMENT_COMMAND)")
 	review := fs.String("review-command", os.Getenv("VICOHA_REVIEW_COMMAND"), "independent review executable (or VICOHA_REVIEW_COMMAND)")
+	discovery := fs.String("verify-discovery-command", os.Getenv("VICOHA_VERIFY_DISCOVERY_COMMAND"), "fresh discovery executable; defaults to review executable with verify-discovery role")
+	noAI := fs.Bool("no-ai-discovery", false, "fail if deterministic discovery is insufficient")
+	mode := fs.String("mode", "vicoha", "workflow: baseline, baseline-verify, independent-review, vicoha")
 	root := fs.String("repo", ".", "repository directory")
 	skills := fs.String("skills-dir", "skills", "ViCoHa skills directory (independent of --repo)")
 	limit := fs.Int("max-iterations", 2, "maximum review passes (must be at least 1)")
@@ -34,11 +37,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	task := strings.Join(fs.Args(), " ")
-	if strings.TrimSpace(task) == "" || *implement == "" || *review == "" || *limit < 1 {
+	if *mode != "baseline" && *mode != "baseline-verify" && *mode != "independent-review" && *mode != "vicoha" {
+		fmt.Fprintln(stderr, "unsupported mode; self-review requires session support absent from the executable contract")
+		return 2
+	}
+	needsReview := *mode == "independent-review" || *mode == "vicoha"
+	if strings.TrimSpace(task) == "" || *implement == "" || needsReview && *review == "" || *limit < 1 {
 		fmt.Fprintln(stderr, "usage: vicoha [--json] --implement-command PATH --review-command PATH [--repo DIR] [--skills-dir DIR] [--max-iterations N>=1] <task>")
 		return 2
 	}
-	res := runner.Run(context.Background(), *root, *skills, task, *implement, *review, *limit)
+	res := runner.RunWithOptions(context.Background(), *root, *skills, task, *implement, *review, *limit, runner.Options{Mode: *mode, DiscoveryCommand: *discovery, DisableAIDiscovery: *noAI})
 	if *jsonOutput {
 		if err := json.NewEncoder(stdout).Encode(res); err != nil {
 			fmt.Fprintln(stderr, "write result:", err)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -13,9 +14,14 @@ import (
 // caller, not the target repository. Provider flags belong in an adapter.
 type Exec struct{ Command string }
 
-type Request struct{ Root, Prompt string }
+type Request struct{ Root, Prompt, Role string }
 
 func (a Exec) Run(ctx context.Context, req Request) (string, error) {
+	switch req.Role {
+	case "implement", "review", "verify-discovery":
+	default:
+		return "", fmt.Errorf("invalid agent role %q", req.Role)
+	}
 	executable := a.Command
 	if strings.ContainsAny(executable, `/\`) && !filepath.IsAbs(executable) {
 		path, err := filepath.Abs(executable)
@@ -26,6 +32,13 @@ func (a Exec) Run(ctx context.Context, req Request) (string, error) {
 	}
 	cmd := exec.CommandContext(ctx, executable)
 	cmd.Dir = req.Root
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !strings.EqualFold(key, "VICOHA_AGENT_ROLE") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, "VICOHA_AGENT_ROLE="+req.Role)
 	cmd.Stdin = strings.NewReader(req.Prompt)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

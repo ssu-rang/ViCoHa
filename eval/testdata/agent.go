@@ -23,10 +23,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	phase := "implement"
-	if strings.HasPrefix(string(b), "You are an independent Review Agent") {
-		phase = "review"
-	}
+	phase := os.Getenv("VICOHA_AGENT_ROLE")
 	if log := os.Getenv("EVAL_PROMPTS"); log != "" {
 		root, err := os.Getwd()
 		if err != nil {
@@ -37,8 +34,16 @@ func run() error {
 		}
 	}
 	if phase == "review" {
+		billing, _ := os.ReadFile("billing/rate.go")
+		if os.Getenv("EVAL_BAD_CHANGE") == "1" && strings.Contains(string(billing), "99") {
+			fmt.Print(`{"findings":[{"title":"Unrelated billing change","category":"scope_creep","severity":"high","actionable":true,"file":"billing/rate.go","details":"Restore the original billing rate of 25; the task only changes greetings."}]}`)
+			return nil
+		}
 		fmt.Print(`{"findings":[]}`)
 		return nil
+	}
+	if os.Getenv("EVAL_BAD_CHANGE") == "1" && strings.Contains(string(b), "Actionable review findings:") {
+		return os.WriteFile("billing/rate.go", []byte("package billing\n\nfunc Rate() int { return 25 }\n"), 0600)
 	}
 	// Each baseline/initial implement call must start from a fresh clean fixture.
 	status, err := exec.Command("git", "status", "--porcelain").Output()
@@ -51,6 +56,11 @@ func run() error {
 	}
 	for name, content := range edits {
 		if err := os.WriteFile(name, []byte(content), 0600); err != nil {
+			return err
+		}
+	}
+	if os.Getenv("EVAL_BAD_CHANGE") == "1" {
+		if err := os.WriteFile("billing/rate.go", []byte("package billing\nfunc Rate() int { return 99 }\n"), 0600); err != nil {
 			return err
 		}
 	}

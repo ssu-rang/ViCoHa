@@ -1,1 +1,1 @@
-Add a "lower" formatter through the existing registry in format/registry.go. Lookup("lower") must return a function that lowercases Unicode text. Preserve upper and unknown-format behavior. Follow the existing function-map pattern; do not add a parallel dispatcher or change the domain model.
+Add a "lower" formatter so Lookup("lower") returns a function that lowercases Unicode text. Preserve upper and unknown-format behavior.

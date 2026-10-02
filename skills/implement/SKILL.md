@@ -23,3 +23,10 @@ is already implemented in the repository.
 
 Do not optimize for sophistication.
 Optimize for the smallest correct and maintainable change.
+
+Implementation and bounded repair use VICOHA_AGENT_ROLE=implement. Do not store
+private reasoning, stdout logs, or session state in the target repository.
+Review and verification discovery run independently from repository evidence.
+Verification commands may be selected with AI assistance, but only executed
+process results determine verification success. Do not introduce verification
+infrastructure merely to satisfy discovery.

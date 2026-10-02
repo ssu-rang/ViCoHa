@@ -43,8 +43,11 @@ func TestMain(m *testing.M) {
 			os.Exit(12)
 		}
 		final := "implementation response"
-		if strings.HasPrefix(string(prompt), "You are an independent Review Agent") {
+		if os.Getenv("VICOHA_AGENT_ROLE") == "review" {
 			final = `{"findings":[]}`
+		}
+		if os.Getenv("VICOHA_AGENT_ROLE") == "verify-discovery" {
+			final = `{"commands":[]}`
 		}
 		if mode == "malformed" {
 			final = "```json\n{}\n```"
@@ -75,6 +78,9 @@ func setup(t *testing.T) string {
 	t.Setenv("VICOHA_CODEX_COMMAND", executable)
 	t.Setenv("VICOHA_CODEX_IMPLEMENT_MODEL", "implement-model")
 	t.Setenv("VICOHA_CODEX_REVIEW_MODEL", "review-model")
+	t.Setenv("VICOHA_AGENT_ROLE", "review")
+	t.Setenv("VICOHA_CODEX_VERIFY_DISCOVERY_MODEL", "discovery-model")
+	t.Setenv("VICOHA_CODEX_VERIFY_DISCOVERY_EFFORT", "low")
 	t.Setenv("VICOHA_CODEX_IMPLEMENT_EFFORT", "medium")
 	t.Setenv("VICOHA_CODEX_REVIEW_EFFORT", "low")
 	t.Setenv("VICOHA_TEST_CODEX", "success")
@@ -95,12 +101,15 @@ func TestFreshRoleExecutions(t *testing.T) {
 	t.Setenv("CODEX_HOME", source)
 	t.Setenv("CODEX_API_KEY", "")
 	prompts := []string{
-		harness.ImplementPrompt("implement skill", "task", "rules", "diff"),
-		harness.ReviewPrompt("review skill", "task", "rules", "diff"),
+		"Implement wording can change completely",
+		"Review wording can change completely",
 		harness.RepairPrompt("implement skill", "task", "rules", "diff", harness.Review{}),
-		harness.ReviewPrompt("review skill", "task", "rules", "diff"),
+		"Review wording can change completely",
 	}
-	for _, prompt := range prompts {
+	prompts = append(prompts, "Entirely different discovery wording")
+	roles := []string{"implement", "review", "implement", "review", "verify-discovery"}
+	for i, prompt := range prompts {
+		t.Setenv("VICOHA_AGENT_ROLE", roles[i])
 		var out, diagnostics bytes.Buffer
 		if err := run(context.Background(), strings.NewReader(prompt), &out, &diagnostics); err != nil {
 			t.Fatal(err)
@@ -132,8 +141,11 @@ func TestFreshRoleExecutions(t *testing.T) {
 			t.Fatalf("temporary state was not cleaned: %s", call.Home)
 		}
 		files := "auth.json"
-		if i%2 == 1 {
+		if roles[i] == "review" {
 			files += ",review.schema.json"
+		}
+		if roles[i] == "verify-discovery" {
+			files += ",verify-discovery.schema.json"
 		}
 		if strings.Join(call.Files, ",") != files {
 			t.Fatalf("leaked state: %v", call.Files)
@@ -141,6 +153,9 @@ func TestFreshRoleExecutions(t *testing.T) {
 		model, sandbox, effort := "implement-model", "workspace-write", "medium"
 		if i%2 == 1 {
 			model, sandbox, effort = "review-model", "read-only", "low"
+		}
+		if roles[i] == "verify-discovery" {
+			model, sandbox, effort = "discovery-model", "read-only", "low"
 		}
 		want := []string{"exec", "--ephemeral", "--model", model, "--sandbox", sandbox,
 			"-c", `approval_policy="never"`, "--color", "never", "--output-last-message",
@@ -150,6 +165,9 @@ func TestFreshRoleExecutions(t *testing.T) {
 		}
 		if i%2 == 1 {
 			want = append(want, "--output-schema", filepath.Join(call.Home, "review.schema.json"))
+		}
+		if roles[i] == "verify-discovery" {
+			want = append(want, "--output-schema", filepath.Join(call.Home, "verify-discovery.schema.json"))
 		}
 		want = append(want, "-c", `model_reasoning_effort="`+effort+`"`, "-")
 		if strings.Join(call.Args, "\x00") != strings.Join(want, "\x00") {
@@ -168,7 +186,7 @@ func TestFailures(t *testing.T) {
 			case "no-model":
 				t.Setenv("VICOHA_CODEX_REVIEW_MODEL", "")
 			case "unknown-role":
-				prompt = "review this"
+				t.Setenv("VICOHA_AGENT_ROLE", "unknown")
 			case "shell":
 				t.Setenv("VICOHA_CODEX_COMMAND", "codex.cmd")
 			case "relative":

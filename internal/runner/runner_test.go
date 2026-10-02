@@ -25,11 +25,11 @@ func TestMain(m *testing.M) {
 func fakeAgent(mode string) {
 	b, _ := io.ReadAll(os.Stdin)
 	prompt := string(b)
-	phase := "implement"
-	if strings.HasPrefix(prompt, "You are an independent Review Agent") {
-		phase = "review"
-	}
+	phase := os.Getenv("VICOHA_AGENT_ROLE")
 	if strings.HasPrefix(prompt, "You are the Implement Agent continuing") {
+		if phase != "implement" {
+			os.Exit(22)
+		}
 		phase = "repair"
 	}
 	logPath := os.Getenv("VICOHA_TEST_LOG")
@@ -40,6 +40,26 @@ func fakeAgent(mode string) {
 	}
 	fmt.Fprintln(f, phase)
 	f.Close()
+	if phase == "verify-discovery" {
+		if strings.Contains(prompt, "private implement output") || strings.Contains(prompt, "implementation change marker") || strings.Contains(prompt, "original task marker") || strings.Contains(prompt, "review skill marker") {
+			os.Exit(23)
+		}
+		switch mode {
+		case "discovery_mutation":
+			_ = os.WriteFile("discovery.txt", []byte("mutation"), 0600)
+		case "discovery_malformed":
+			fmt.Print("```json\n{}\n```")
+			return
+		case "discovery_unsafe":
+			fmt.Print(`{"commands":[{"argv":["rm","-rf","."],"reason":"cleanup","evidence":["README.md"]}]}`)
+			return
+		case "no_checks":
+			fmt.Print(`{"commands":[]}`)
+			return
+		}
+		fmt.Print(`{"commands":[{"argv":["go","test","./..."],"reason":"documented tests","evidence":["README.md"]},{"argv":["go","build","./..."],"reason":"documented build","evidence":["go.mod"]}]}`)
+		return
+	}
 	if !strings.Contains(prompt, "original task marker") {
 		os.Exit(11)
 	}
@@ -103,7 +123,7 @@ func fakeAgent(mode string) {
 		_ = os.Remove("README.md")
 	}
 	if mode == "limit" || mode == "one_pass" || (mode == "repair" && !strings.Contains(string(log), "review")) {
-		fmt.Print(`{"findings":[{"title":"Concrete defect","severity":"high","actionable":true,"details":"Fix the implementation"},{"title":"speculative marker","severity":"low","actionable":false,"details":"Maybe change unrelated code"}]}`)
+		fmt.Print(`{"findings":[{"title":"Concrete defect","category":"functional_defect","severity":"high","actionable":true,"details":"Fix the implementation"},{"title":"speculative marker","category":"functional_defect","severity":"low","actionable":false,"details":"Maybe change unrelated code"}]}`)
 		return
 	}
 	fmt.Print(`{"findings":[]}`)
@@ -129,7 +149,17 @@ func TestRunWorkflow(t *testing.T) {
 		{"review_commit", result.ReviewFailed, "implement\nreview\n", false},
 		{"review_branch", result.ReviewFailed, "implement\nreview\n", false},
 		{"one_pass", result.IterationLimit, "implement\nreview\n", false},
-		{"no_checks", result.VerificationFailed, "implement\nreview\n", false},
+		{"no_checks", result.VerificationFailed, "implement\nreview\nverify-discovery\n", false},
+		{"discovery", result.Succeeded, "implement\nreview\nverify-discovery\n", true},
+		{"discovery_failure", result.VerificationFailed, "implement\nreview\nverify-discovery\n", true},
+		{"discovery_mutation", result.VerificationFailed, "implement\nreview\nverify-discovery\n", true},
+		{"discovery_malformed", result.VerificationFailed, "implement\nreview\nverify-discovery\n", true},
+		{"discovery_unsafe", result.VerificationFailed, "implement\nreview\nverify-discovery\n", true},
+		{"baseline", result.Succeeded, "implement\n", false},
+		{"baseline-verify", result.Succeeded, "implement\n", true},
+		{"baseline_unknown", result.VerificationFailed, "implement\n", false},
+		{"independent-review", result.Succeeded, "implement\nreview\nrepair\nreview\n", false},
+		{"no_ai_discovery", result.VerificationFailed, "implement\nreview\n", false},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			parent := t.TempDir()
@@ -143,6 +173,12 @@ func TestRunWorkflow(t *testing.T) {
 				writeTestFile(t, filepath.Join(root, "go.mod"), "module fixture\n\ngo 1.22\n")
 				writeTestFile(t, filepath.Join(root, "main.go"), "package main\nfunc main() {}\n")
 			}
+			if strings.HasPrefix(tc.mode, "discovery") {
+				writeTestFile(t, filepath.Join(root, "README.md"), "Verify with `go test ./...` and `go build ./...`.")
+			}
+			if tc.mode == "discovery_failure" {
+				writeTestFile(t, filepath.Join(root, "main.go"), "invalid Go source")
+			}
 			for _, args := range [][]string{{"init"}, {"add", "."}, {"-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial"}} {
 				cmd := exec.Command("git", args...)
 				cmd.Dir = root
@@ -152,7 +188,20 @@ func TestRunWorkflow(t *testing.T) {
 			}
 			log := filepath.Join(parent, "calls.txt")
 			t.Setenv("VICOHA_TEST_AGENT", tc.mode)
+			options := Options{}
+			switch tc.mode {
+			case "baseline", "baseline-verify":
+				options.Mode = tc.mode
+			case "baseline_unknown":
+				options.Mode = "baseline-verify"
+			case "independent-review":
+				options.Mode = tc.mode
+				t.Setenv("VICOHA_TEST_AGENT", "repair")
+			case "no_ai_discovery":
+				options.DisableAIDiscovery = true
+			}
 			t.Setenv("VICOHA_TEST_LOG", log)
+			t.Setenv("VICOHA_AGENT_ROLE", "inherited-invalid-role")
 			executable, err := os.Executable()
 			if err != nil {
 				t.Fatal(err)
@@ -171,7 +220,7 @@ func TestRunWorkflow(t *testing.T) {
 			if tc.mode == "one_pass" {
 				limit = 1
 			}
-			got := Run(context.Background(), root, skills, "original task marker", executable, executable, limit)
+			got := RunWithOptions(context.Background(), root, skills, "original task marker", executable, executable, limit, options)
 			if got.AgentInvocations != strings.Count(tc.phases, "\n") || got.ReviewPasses != strings.Count(tc.phases, "review") || got.RepairPasses != strings.Count(tc.phases, "repair") || got.DurationMS <= 0 {
 				t.Fatalf("incorrect telemetry: %+v", got)
 			}
@@ -185,8 +234,17 @@ func TestRunWorkflow(t *testing.T) {
 			if string(calls) != tc.phases {
 				t.Fatalf("calls %q, want %q", calls, tc.phases)
 			}
-			if tc.status == result.Succeeded && len(got.Verification) != 2 {
+			if tc.status == result.Succeeded && tc.goProject && len(got.Verification) != 2 {
 				t.Fatalf("expected Go test and build: %+v", got.Verification)
+			}
+			if (options.Mode == "baseline" || options.Mode == "independent-review") && len(got.Verification) != 0 {
+				t.Fatal("verification ran in excluded mode")
+			}
+			if tc.mode == "discovery" && (got.DiscoveryInvocations != 1 || got.Verification[0].Source != "ai" || got.VerificationCount != 2) {
+				t.Fatalf("missing discovery provenance: %+v", got)
+			}
+			if tc.mode == "discovery_failure" && (len(got.Verification) != 1 || got.Verification[0].Status != "failed") {
+				t.Fatalf("discovery decided execution status: %+v", got)
 			}
 		})
 	}

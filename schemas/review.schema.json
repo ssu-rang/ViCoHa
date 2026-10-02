@@ -10,10 +10,12 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["title", "severity", "actionable", "details"],
+        "required": ["title", "category", "severity", "actionable", "details"],
         "properties": {
           "title": {"type": "string", "pattern": "\\S"},
-          "severity": {"type": "string", "pattern": "\\S"},
+          "category": {"type": "string", "enum": ["functional_defect", "regression", "overengineering", "temporary_fix", "resource_waste", "excessive_tests", "scope_creep", "architecture_drift", "integration_problem", "other"]},
+          "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+          "file": {"type": "string", "pattern": "\\S"},
           "actionable": {"type": "boolean"},
           "details": {"type": "string", "pattern": "\\S"}
         }

@@ -14,9 +14,15 @@ const (
 )
 
 type Verification struct {
-	Command string `json:"command"`
-	Status  string `json:"status"`
-	Output  string `json:"output"`
+	Command            string   `json:"command"`
+	Argv               []string `json:"argv"`
+	Source             string   `json:"source"`
+	RepositoryDeclared bool     `json:"repository_declared"`
+	Evidence           []string `json:"evidence"`
+	Status             string   `json:"status"`
+	Output             string   `json:"output"`
+	DurationMS         int64    `json:"duration_ms"`
+	ExitCode           *int     `json:"exit_code"`
 }
 
 type ReviewPass struct {
@@ -27,12 +33,15 @@ type ReviewPass struct {
 // Counts include attempted invocations, including those that fail.
 // Reviews contains only successfully parsed, read-only review responses.
 type Result struct {
-	Status           Status         `json:"status"`
-	Message          string         `json:"message"`
-	ReviewPasses     int            `json:"review_passes"`
-	RepairPasses     int            `json:"repair_passes"`
-	AgentInvocations int            `json:"agent_invocations"`
-	DurationMS       int64          `json:"duration_ms"`
-	Reviews          []ReviewPass   `json:"reviews"`
-	Verification     []Verification `json:"verification"`
+	Status               Status         `json:"status"`
+	Message              string         `json:"message"`
+	ReviewPasses         int            `json:"review_passes"`
+	RepairPasses         int            `json:"repair_passes"`
+	AgentInvocations     int            `json:"agent_invocations"`
+	DiscoveryInvocations int            `json:"discovery_invocations"`
+	VerificationCount    int            `json:"verification_count"`
+	Mode                 string         `json:"mode"`
+	DurationMS           int64          `json:"duration_ms"`
+	Reviews              []ReviewPass   `json:"reviews"`
+	Verification         []Verification `json:"verification"`
 }

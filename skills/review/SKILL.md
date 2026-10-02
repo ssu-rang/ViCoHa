@@ -41,3 +41,11 @@ Use only the original task and repository evidence. Do not seek implementation
 conversation, stdout, hidden reasoning or session state. Remain read-only: do not
 edit files, stage changes or commit. Return the JSON review contract requested by
 the runner, with an empty findings array when there are no evidenced issues.
+
+Findings require title, category, severity, actionable and details. Use category
+functional_defect, regression, overengineering, temporary_fix, resource_waste,
+excessive_tests, scope_creep, architecture_drift, integration_problem or other.
+Severity must be low, medium, high or critical. Optionally include a non-empty
+file path. Do not add line-number fields. Return strict JSON only; unknown fields,
+duplicate keys and prose are rejected. The runner supplies VICOHA_AGENT_ROLE=review;
+never infer the transport role from the first sentence of a prompt.

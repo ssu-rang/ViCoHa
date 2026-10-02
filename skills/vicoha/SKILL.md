@@ -19,19 +19,32 @@ workflow; it does not introduce additional runtime skill invocations.
    with the implement skill, original task, current guidance/diff and actionable
    findings. Continue the task through repository state, not a shared session.
    Reject speculative or out-of-scope findings. Review independently again.
-4. VERIFY: after a review with no actionable findings, Go code discovers and runs
-   deterministic project checks. No verify agent or verify skill is invoked.
+4. VERIFY: after a clean review, discover commands deterministically from project
+   configuration. If evidence is insufficient, invoke a fresh read-only
+   verification-discovery role with repository configuration/guidance only. It
+   proposes argv arrays with reasons and evidence, never a pass/fail judgment.
+   Validate the complete selection, then execute commands deterministically.
+   Process exit results alone determine success. Empty selections fail.
 
 `--max-iterations` bounds review passes (default 2, minimum 1). With the default,
 there can be one initial implementation, two reviews and one repair. Actionable
-findings on the last pass yield `iteration_limit`. Agent errors, malformed review
-JSON and reviewer mutations fail the workflow. Verification failures terminate
-the workflow without another repair loop; no supported checks also fails.
+findings on the last pass yield `iteration_limit`. Agent errors, malformed structured
+JSON and read-only agent mutations fail the workflow. Verification failures terminate
+the workflow without another repair loop; no discovered checks also fails.
 
 The runner's Git checks cover HEAD/ref, index, tracked files and non-ignored
 untracked content. They do not detect ignored/external files or transient changes
-restored before review exits. Executable adapters must enforce fresh sessions and
+restored before the read-only agent exits. Executable adapters must enforce fresh sessions and
 may add a sandbox; they must not store private agent state in the target repo.
 
 Completion requires both a clean independent review and deterministic verification.
-There are no separate plan, repair or verify subsystems in the current runner.
+There are no separate plan or repair agents. Repair uses the implementation role.
+The generic executable contract signals roles with VICOHA_AGENT_ROLE: implement,
+review, verify-discovery. Prompt prefixes do not select roles. Discovery does not
+receive implementation/review session state, private reasoning or stdout.
+
+Command validation reduces accidental risk; it is not a sandbox against malicious
+local agents or repository scripts. Generic adapters must preserve fresh sessions
+and enforce read-only roles. The Codex adapter uses a fresh temporary home and
+read-only sandbox for review and discovery. Evaluation modes may intentionally
+omit stages; only the default full workflow requires review and verification.

@@ -1,10 +1,11 @@
-# Future SWE-bench adapter
+# Future real-repository evaluation
 
-The custom baseline/ViCoHa comparison in `../run.py` is the current evaluator.
-No SWE-bench dataset, harness, or heavyweight dependencies are bundled here.
+SWE-bench integration is not implemented. The current evaluator accepts additional
+case collections through `eval/run.py --cases-dir PATH`, using repo/, task.md,
+oracle.json and testdata/ and emitting the same version 2 records across modes.
+Oracle commands are argv arrays and immutable oracle files are installed only in
+a scoring copy. A future dataset importer can prepare that layout or reuse the
+prepare/run_case/assess boundaries without changing record consumers.
 
-A future adapter should prepare each upstream task and base revision, invoke the
-same baseline executable or ViCoHa CLI, export the resulting patch, and submit it
-to the official SWE-bench test environment. Preserve task identity, executable
-configuration, workflow JSON, and upstream test results for comparison. Dataset
-provisioning and execution isolation belong to that integration, not the Go runner.
+Dataset checkout, environment provisioning, containers, patches from a hosted
+benchmark and token/cost controls are intentionally outside the current scope.

@@ -34,14 +34,15 @@ func run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	role := ""
-	switch {
-	case bytes.HasPrefix(prompt, []byte("You are the Implement Agent. ")),
-		bytes.HasPrefix(prompt, []byte("You are the Implement Agent continuing the original task. ")):
+	switch os.Getenv("VICOHA_AGENT_ROLE") {
+	case "implement":
 		role = "IMPLEMENT"
-	case bytes.HasPrefix(prompt, []byte("You are an independent Review Agent. ")):
+	case "review":
 		role = "REVIEW"
+	case "verify-discovery":
+		role = "VERIFY_DISCOVERY"
 	default:
-		return fmt.Errorf("unrecognized ViCoHa role prompt")
+		return fmt.Errorf("VICOHA_AGENT_ROLE must be implement, review or verify-discovery")
 	}
 	modelKey := "VICOHA_CODEX_" + role + "_MODEL"
 	model := strings.TrimSpace(os.Getenv(modelKey))
@@ -88,7 +89,7 @@ func run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 	}
 	sandbox := "workspace-write"
-	if role == "REVIEW" {
+	if role != "IMPLEMENT" {
 		sandbox = "read-only"
 	}
 	output := filepath.Join(home, "last-message.txt")
@@ -99,9 +100,13 @@ func run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error {
 		// Keep native sandboxing via the restricted-token implementation.
 		args = append(args, "-c", `windows.sandbox="unelevated"`)
 	}
-	if role == "REVIEW" {
-		schema := filepath.Join(home, "review.schema.json")
-		if err := os.WriteFile(schema, schemas.Review, 0600); err != nil {
+	if role != "IMPLEMENT" {
+		name, data := "review.schema.json", schemas.Review
+		if role == "VERIFY_DISCOVERY" {
+			name, data = "verify-discovery.schema.json", schemas.Discovery
+		}
+		schema := filepath.Join(home, name)
+		if err := os.WriteFile(schema, data, 0600); err != nil {
 			return err
 		}
 		args = append(args, "--output-schema", schema)
@@ -134,6 +139,11 @@ func run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error {
 	if role == "REVIEW" {
 		if _, err := harness.ParseReview(string(final)); err != nil {
 			return fmt.Errorf("invalid review response: %w", err)
+		}
+	}
+	if role == "VERIFY_DISCOVERY" {
+		if _, err := harness.ParseDiscovery(string(final)); err != nil {
+			return fmt.Errorf("invalid verification-discovery response: %w", err)
 		}
 	}
 	_, err = stdout.Write(final)

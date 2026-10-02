@@ -1,4 +1,4 @@
-package runner
+package verify
 
 import (
 	"encoding/json"
@@ -12,8 +12,8 @@ import (
 	"vicoha/internal/result"
 )
 
-// Verify selects checks from configuration files actually present in the project.
-func Verify(root string) ([]result.Verification, error) {
+// Run selects checks from configuration files actually present in the project.
+func Run(root string) ([]result.Verification, error) {
 	commands, err := verificationCommands(root)
 	if err != nil {
 		return nil, err
@@ -41,7 +41,11 @@ func Verify(root string) ([]result.Verification, error) {
 
 func verificationCommands(root string) ([][]string, error) {
 	var commands [][]string
-	if exists(filepath.Join(root, "go.mod")) {
+	goProject, err := configExists(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return nil, err
+	}
+	if goProject {
 		commands = append(commands, []string{"go", "test", "./..."}, []string{"go", "build", "./..."})
 	}
 	b, err := os.ReadFile(filepath.Join(root, "package.json"))
@@ -61,7 +65,10 @@ func verificationCommands(root string) ([][]string, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read package.json: %w", err)
 	}
-	pytest := exists(filepath.Join(root, "pytest.ini"))
+	pytest, err := configExists(filepath.Join(root, "pytest.ini"))
+	if err != nil {
+		return nil, err
+	}
 	b, err = os.ReadFile(filepath.Join(root, "pyproject.toml"))
 	if err == nil {
 		for _, line := range strings.Split(string(b), "\n") {
@@ -82,4 +89,16 @@ func verificationCommands(root string) ([][]string, error) {
 	return commands, nil
 }
 
-func exists(path string) bool { _, err := os.Stat(path); return err == nil }
+func configExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect configuration %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return false, fmt.Errorf("configuration %s is a directory", path)
+	}
+	return true, nil
+}

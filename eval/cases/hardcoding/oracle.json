@@ -1,0 +1,26 @@
+{
+  "must_pass": [
+    [
+      "go",
+      "test",
+      "./..."
+    ],
+    [
+      "go",
+      "build",
+      "./..."
+    ]
+  ],
+  "must_not_touch": [
+    "go.mod",
+    "AGENTS.md",
+    "**/AGENTS.md"
+  ],
+  "must_change": [
+    "normalize.go"
+  ],
+  "max_changed_files": 3,
+  "forbidden_patterns": [
+    "TODO temporary"
+  ]
+}

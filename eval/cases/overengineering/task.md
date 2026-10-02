@@ -1,0 +1,1 @@
+Add Clamp(value, low, high int) int to numbers.go. Return the nearest bound when value is outside [low, high], otherwise return value. Callers guarantee low <= high. This is a small local integer helper: no configuration, new packages, framework, or external dependencies are needed. Keep any test addition focused.

@@ -1,0 +1,1 @@
+Extend IsRetryable to include HTTP 429 alongside the existing 500 through 599 range. Preserve all other behavior. Add or update a focused table test if useful; this one-condition change does not need generated cases, benchmarks, or a new test framework. Keep added test code within 40 lines.

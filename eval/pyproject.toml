@@ -1,0 +1,6 @@
+[project]
+name = "vicoha-eval"
+version = "0.1.0"
+description = "Deterministic black-box coding-agent evaluations for ViCoHa"
+requires-python = ">=3.11"
+dependencies = []

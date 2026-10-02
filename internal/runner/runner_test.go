@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"vicoha/internal/result"
 )
 
 // The test binary acts as an executable backend in child processes, exercising
@@ -46,6 +48,9 @@ func fakeAgent(mode string) {
 			fmt.Fprintln(os.Stderr, "implement failed")
 			os.Exit(12)
 		}
+		if phase == "repair" && (strings.Contains(prompt, "speculative marker") || !strings.Contains(prompt, "Concrete defect")) {
+			os.Exit(20)
+		}
 		if !strings.Contains(prompt, "implement skill marker") {
 			os.Exit(13)
 		}
@@ -73,11 +78,26 @@ func fakeAgent(mode string) {
 		fmt.Print("{}")
 		return
 	}
+	if mode == "staging" {
+		if err := exec.Command("git", "add", "change.txt").Run(); err != nil {
+			os.Exit(18)
+		}
+	}
+	if mode == "review_branch" {
+		if err := exec.Command("git", "checkout", "-b", "review-branch").Run(); err != nil {
+			os.Exit(21)
+		}
+	}
+	if mode == "review_commit" {
+		if err := exec.Command("git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "review mutation").Run(); err != nil {
+			os.Exit(19)
+		}
+	}
 	if mode == "mutating" {
 		_ = os.WriteFile("change.txt", []byte("review mutation"), 0600)
 	}
-	if mode == "limit" || (mode == "repair" && !strings.Contains(string(log), "review")) {
-		fmt.Print(`{"findings":[{"title":"Concrete defect","severity":"high","actionable":true,"details":"Fix the implementation"}]}`)
+	if mode == "limit" || mode == "one_pass" || (mode == "repair" && !strings.Contains(string(log), "review")) {
+		fmt.Print(`{"findings":[{"title":"Concrete defect","severity":"high","actionable":true,"details":"Fix the implementation"},{"title":"speculative marker","severity":"low","actionable":false,"details":"Maybe change unrelated code"}]}`)
 		return
 	}
 	fmt.Print(`{"findings":[]}`)
@@ -86,18 +106,22 @@ func fakeAgent(mode string) {
 func TestRunWorkflow(t *testing.T) {
 	for _, tc := range []struct {
 		mode      string
-		status    Status
+		status    result.Status
 		phases    string
 		goProject bool
 	}{
-		{"committed", Succeeded, "implement\nreview\n", true},
-		{"repair", Succeeded, "implement\nreview\nrepair\nreview\n", true},
-		{"limit", IterationLimit, "implement\nreview\nrepair\nreview\n", false},
-		{"implement_failure", ImplementationFailed, "implement\n", false},
-		{"review_failure", ReviewFailed, "implement\nreview\n", false},
-		{"malformed", ReviewFailed, "implement\nreview\n", false},
-		{"mutating", ReviewFailed, "implement\nreview\n", false},
-		{"no_checks", VerificationFailed, "implement\nreview\n", false},
+		{"committed", result.Succeeded, "implement\nreview\n", true},
+		{"repair", result.Succeeded, "implement\nreview\nrepair\nreview\n", true},
+		{"limit", result.IterationLimit, "implement\nreview\nrepair\nreview\n", false},
+		{"implement_failure", result.ImplementationFailed, "implement\n", false},
+		{"review_failure", result.ReviewFailed, "implement\nreview\n", false},
+		{"malformed", result.ReviewFailed, "implement\nreview\n", false},
+		{"mutating", result.ReviewFailed, "implement\nreview\n", false},
+		{"staging", result.ReviewFailed, "implement\nreview\n", false},
+		{"review_commit", result.ReviewFailed, "implement\nreview\n", false},
+		{"review_branch", result.ReviewFailed, "implement\nreview\n", false},
+		{"one_pass", result.IterationLimit, "implement\nreview\n", false},
+		{"no_checks", result.VerificationFailed, "implement\nreview\n", false},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			parent := t.TempDir()
@@ -124,7 +148,24 @@ func TestRunWorkflow(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := Run(root, skills, "original task marker", executable, executable, 2)
+			if tc.mode == "committed" {
+				cwd, err := os.Getwd()
+				if err != nil {
+					t.Fatal(err)
+				}
+				executable, err = filepath.Rel(cwd, executable)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			limit := 2
+			if tc.mode == "one_pass" {
+				limit = 1
+			}
+			got := Run(context.Background(), root, skills, "original task marker", executable, executable, limit)
+			if got.AgentInvocations != strings.Count(tc.phases, "\n") || got.ReviewPasses != strings.Count(tc.phases, "review") || got.RepairPasses != strings.Count(tc.phases, "repair") || got.DurationMS <= 0 {
+				t.Fatalf("incorrect telemetry: %+v", got)
+			}
 			if got.Status != tc.status {
 				t.Fatalf("status %s, want %s: %s", got.Status, tc.status, got.Message)
 			}
@@ -135,23 +176,10 @@ func TestRunWorkflow(t *testing.T) {
 			if string(calls) != tc.phases {
 				t.Fatalf("calls %q, want %q", calls, tc.phases)
 			}
-			if tc.status == Succeeded && len(got.Verification) != 2 {
+			if tc.status == result.Succeeded && len(got.Verification) != 2 {
 				t.Fatalf("expected Go test and build: %+v", got.Verification)
 			}
 		})
-	}
-}
-
-func TestReviewContract(t *testing.T) {
-	for _, input := range []string{`null`, `{}`, `{"findings":null}`, `{"findings":[{}]}`, `{"findings":[],"unexpected":true}`, `{"findings":[]} {}`, `{"findings":[{"title":"bug","severity":"high","details":"defect"}]}`, `{"findings":[{"title":"bug","severity":"high","actionable":null,"details":"defect"}]}`} {
-		if _, err := parseReview(input); err == nil {
-			t.Errorf("accepted invalid review: %s", input)
-		}
-	}
-	for _, input := range []string{`{"findings":[]}`, `{"findings":[{"title":"bug","severity":"high","actionable":false,"details":"defect"}]}`} {
-		if _, err := parseReview(input); err != nil {
-			t.Errorf("rejected valid review: %v", err)
-		}
 	}
 }
 

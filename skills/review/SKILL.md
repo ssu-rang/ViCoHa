@@ -1,8 +1,15 @@
----
-name: review
-description: Review code changes for correctness and risks.
----
+# ViCoHa Review
 
-# Review
+Independently review the completed implementation against the original
+requirement and repository context.
 
-Intended responsibility: identify defects, regressions, and missing coverage.
+Look for:
+- actionable defects
+- regressions
+- incorrect assumptions
+- incomplete behavior
+- integration problems
+
+Do not assume the implementation decisions are correct.
+
+Report only issues that justify a code change, with evidence.

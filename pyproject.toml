@@ -1,6 +1,0 @@
-[project]
-name = "vicoha-eval"
-version = "0.0.0"
-description = "Future evaluation tooling for ViCoHa"
-requires-python = ">=3.11"
-dependencies = []

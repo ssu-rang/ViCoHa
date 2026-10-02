@@ -1,0 +1,1 @@
+Normalize currently trims surrounding whitespace. Extend it to lowercase every identifier using Unicode case conversion, while preserving interior punctuation and whitespace. It must work for arbitrary identifiers, not just the visible example. Keep the existing API.

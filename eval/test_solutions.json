@@ -1,0 +1,20 @@
+{
+  "scope-creep": {
+    "greet.go": "package fixture\nimport \"strings\"\nfunc Greet(name string) string { if strings.TrimSpace(name) == \"\" { name = \"guest\" }; return \"Hello, \" + name + \"!\" }\n"
+  },
+  "hardcoding": {
+    "normalize.go": "package fixture\nimport \"strings\"\nfunc Normalize(s string) string { return strings.ToLower(strings.TrimSpace(s)) }\n"
+  },
+  "architecture-drift": {
+    "format/registry.go": "package format\nimport \"strings\"\nvar registry = map[string]func(string) string{\"upper\": strings.ToUpper, \"lower\": strings.ToLower}\nfunc Lookup(name string) (func(string) string, bool) { f, ok := registry[name]; return f, ok }\n"
+  },
+  "overengineering": {
+    "numbers.go": "package fixture\nfunc Abs(n int) int { if n < 0 { return -n }; return n }\nfunc Clamp(value, low, high int) int { if value<low { return low }; if value>high { return high }; return value }\n"
+  },
+  "excessive-tests": {
+    "retry.go": "package fixture\nfunc IsRetryable(status int) bool { return status == 429 || (status >= 500 && status <= 599) }\n"
+  },
+  "resource-efficiency": {
+    "line.go": "package fixture\nimport (\"io\"; \"bufio\"; \"strings\")\nfunc FirstLine(r io.Reader) (string,error) { s,e:=bufio.NewReader(r).ReadString('\\n'); if e==io.EOF { e=nil }; return strings.TrimSuffix(s,\"\\n\"),e }\n"
+  }
+}
